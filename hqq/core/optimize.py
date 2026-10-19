@@ -103,7 +103,15 @@ def shrink_lp_op(x: Tensor, beta: float, lp_norm: float) -> Tensor:
     else:
         #torch.sign(x) * torch.nn.functional.relu(torch.abs(x) - (1.0 / beta) * torch.pow(torch.abs(x), lp_norm - 1))
         out = torch.abs(x)
-        out.sub_((1.0 / beta) * out.pow(lp_norm - 1)).clamp_min_(0.0)
+        # pow(Tensor, non-integer scalar) falls back to a non-vectorized path on CPU and is
+        # ~2x slower than the mathematically identical exp((p-1)*log(x)), which hits the
+        # vectorized exp/log kernels. Other backends (e.g. CUDA) have a fast native pow,
+        # so only the CPU path is swapped; the result is unchanged.
+        if out.device.type == "cpu":
+            p_term = torch.exp((lp_norm - 1) * torch.log(out))
+        else:
+            p_term = out.pow(lp_norm - 1)
+        out.sub_((1.0 / beta) * p_term).clamp_min_(0.0)
         out.mul_(torch.sign(x))
         return out
 
